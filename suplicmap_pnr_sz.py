@@ -10,88 +10,72 @@ import csv, codecs
 import geojson
 import fiona
 from fiona.crs import from_epsg
-import pprint
+import click
 import gdal
 
-url = 'http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/10/query'
-max_return = 1000 # 最大返回条数
+# url = 'http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/10/query'  # 道路边线
+# output_path = 'res/道路边线.geojson'
 
+# url = 'http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/11/query'  # 道路面
+# output_path = 'res/道路面.geojson'
 
-def main():
+num_return = 1 # 返回条数
+# max_return = 10000
+
+@click.command()
+@click.option('--url', '-u',
+              help='Input url. For example, http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/10/query',
+              required=True)
+@click.option(
+    '--output-path', '-o',
+    help='Output geojson, need the full path. For example, res/道路面.geojson',
+    required=True)
+def main(url, output_path):
     gdal.SetConfigOption("SHAPE_ENCODING", "utf-8")
-
-    with fiona.open('data/1.geojson', 'r', encoding='utf-8') as c:
-        # rec = next(c)
-        # print(rec)
-
-        schema = c.schema
-        pprint.pprint(c.schema)
 
     i = 0
     record_num = 1
     feaColl = []
 
+    print('开始抓取数据...')
     while record_num > 0:
-        query_clause = "OBJECTID_1 >= " + str(i * max_return) + " and OBJECTID_1 < " + str((i + 1) * max_return)
-        geoObjs = get_geojson_by_query(query_clause)
-        record_num = len(geoObjs['features'])
+        if i == 26:
+            print('error')
 
-        feaColl = feaColl + geoObjs['features']
+        trytime = 0
+        while True:
+            query_clause = "OBJECTID_1 > " + str(i * num_return) + " and OBJECTID_1 <= " + str((i + 1) * num_return)
+            geoObjs = get_geojson_by_query(url, query_clause)
+            if 'features' in geoObjs.keys():
+                record_num = len(geoObjs['features'])
+                feaColl = feaColl + geoObjs['features']
+                break
+            else:
+                trytime += 1
+                if trytime > 5:
+                    print('error in ' + query_clause)
+                    break
+
         i += 1
+        print(i)
+    print('完成抓取.')
 
-        schema2 = {
-            'geometry': 'LineString',
-            'properties': OrderedDict([('OBJECTID_1', 'int'),
-                                       ('OBJECTID', 'int'),
-                                       ('NAME', 'str'),
-                                       ('CLASS', 'int'),
-                                       ('FROM_NAME', 'str'),
-                                       ('TO_NAME', 'str'),
-                                       ('WIDTH', 'str'),
-                                       ('UPDATE_', 'int'),
-                                       ('MEMO_', 'str'),
-                                       ('备注', 'str'),
-                                       ('数据来源', 'str'),
-                                       ('Shape_Leng', 'float'),
-                                       ('唯一标识码', 'str'),
-                                       ('更新人', 'str'),
-                                       ('涉', 'int'),
-                                       ('Shape_Le_1', 'float'),
-                                       ('国标代码', 'str'),
-                                       ('Shape_Length', 'float')])}
+    res = {
+        'type': geoObjs['type'],
+        'crs': geoObjs['crs'],
+        'features': feaColl
+    }
 
-        schema3 = {
-            'geometry': 'LineString',
-            'properties': OrderedDict([('OBJECTID_1', 'int'),
-                                       ('OBJECTID', 'int'),
-                                       ('NAME', 'str'),
-                                       ('CLASS', 'int'),
-                                       ('FROM_NAME', 'str'),
-                                       ('TO_NAME', 'str'),
-                                       ('WIDTH', 'str'),
-                                       ('UPDATE_', 'int'),
-                                       ('MEMO_', 'str')])}
-
-        with fiona.open('res/1.shp', 'w', schema=schema2, driver='ESRI Shapefile', crs=from_epsg(2435), encoding='utf-8') as d:
-            # for feature in geoObjs['features']:
-                d.write(geoObjs['features'][0])
-                # d.write({
-                #     'geometry': geoObjs['features'][0]['geometry'],
-                #     'properties': OrderedDict([('OBJECTID_1', 1),
-                #                                ('OBJECTID', 1),
-                #                                ('NAME', 'str'),
-                #                                ('CLASS', 1),
-                #                                ('FROM_NAME', '中观'),
-                #                                ('TO_NAME', 'str'),
-                #                                ('WIDTH', 'str'),
-                #                                ('UPDATE_', 2),
-                #                                ('MEMO_', 'str')])
-                # })
+    print('开始输出到文件...')
+    with open(output_path, 'w') as output:
+        geojson.dump(res, output)
+        # with fiona.open('res/1.shp', 'w', schema=schema2, driver='ESRI Shapefile', crs=from_epsg(2435), encoding='utf-8') as d:
+        #         d.write(geoObjs['features'][0])
     print("over!")
 
 
 #  Post参数到服务器获取geojson对象
-def get_geojson_by_query(query_clause):
+def get_geojson_by_query(url, query_clause):
     # 定义请求头
     reqheaders = {'Content-Type': 'application/x-www-form-urlencoded',
                   'Host': 'suplicmap.pnr.sz',

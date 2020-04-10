@@ -2,6 +2,7 @@ import fiona
 from collections import OrderedDict
 from fiona.crs import from_epsg
 import re
+import asyncio
 
 # str_test = 'abcdefg中华HABC123456民族'
 str_test = '唯一标识码'

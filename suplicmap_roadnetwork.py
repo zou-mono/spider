@@ -1,9 +1,14 @@
 # -*- coding: utf8 -*-
 
-import urllib.request, urllib.parse
+from multiprocessing import Pool, cpu_count
+from gevent import monkey
+from gevent.pool import Pool as gpool
+from gevent.queue import Queue
+import json
+import copy
 from log4p import Log
+import urllib.request, urllib.parse
 import geojson
-import time
 import fiona
 from fiona.crs import from_epsg
 import click
@@ -17,8 +22,8 @@ import gdal
 
 num_return = 1 # 返回条数
 # max_return = 10000
-
 log = Log()
+
 @click.command()
 @click.option('--url', '-u',
               help='Input url. For example, http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/10/query',
@@ -34,11 +39,8 @@ def main(url, output_path):
     record_num = 1
     feaColl = []
 
-    start = time.time()
     log.info('开始抓取数据...')
     while record_num > 0:
-        if i == 26:
-            print('error')
 
         trytime = 0
         while True:
@@ -51,13 +53,12 @@ def main(url, output_path):
             else:
                 trytime += 1
                 if trytime > 5:
-                    print('error in ' + query_clause)
+                    log.error('error in ' + query_clause)
                     break
 
         i += 1
         log.debug(i)
-    end = time.time()
-    log.info('完成抓取.耗时：' + str(end - start))
+    log.info('完成抓取.')
 
     res = {
         'type': geoObjs['type'],

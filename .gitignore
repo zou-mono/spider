@@ -65,3 +65,5 @@ fabric.properties
 /DetectorData
 /data
 /.vagrant
+
+/__pycache__

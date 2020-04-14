@@ -5,14 +5,14 @@ from gevent import monkey
 from gevent.pool import Pool as gpool
 from gevent.queue import Queue
 import json
-import copy
 from log4p import Log
 import urllib.request, urllib.parse
-import geojson
-import fiona
+import os
+from osgeo import gdal
+from osgeo import ogr
+import osgeo.osr as osr
 from fiona.crs import from_epsg
 import click
-import gdal
 
 # url = 'http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/10/query'  # 道路边线
 # output_path = 'res/道路边线.geojson'
@@ -20,7 +20,7 @@ import gdal
 # url = 'http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/11/query'  # 道路面
 # output_path = 'res/道路面.geojson'
 
-num_return = 1 # 返回条数
+num_return = 1000 # 返回条数
 # max_return = 10000
 log = Log()
 
@@ -29,11 +29,38 @@ log = Log()
               help='Input url. For example, http://suplicmap.pnr.sz/dynaszmap_3/rest/services/SZMAP_DLJT_GKDL/MapServer/10/query',
               required=True)
 @click.option(
-    '--output-path', '-o',
-    help='Output geojson, need the full path. For example, res/道路面.geojson',
+    '--layer-name', '-n',
+    help='Output layer name, which is shown in geodatabase. For example, 道路面',
     required=True)
-def main(url, output_path):
-    gdal.SetConfigOption("SHAPE_ENCODING", "utf-8")
+@click.option(
+    '--output-path', '-o',
+    help='Output file geodatabase, need the full path. For example, res/data.gdb',
+    required=True)
+def main(url, layer_name, output_path):
+
+    outdriver=ogr.GetDriverByName('FileGDB')
+    if os.path.exists(output_path):
+        gdb = outdriver.Open(output_path, 1)
+    else:
+        gdb = outdriver.CreateDataSource(output_path)
+
+    query_clause = "OBJECTID_1 = 0"
+    geoObjs = get_json_by_query(url, query_clause)
+    temp_layer = geoObjs.GetLayer()
+    out_layerDefn = temp_layer.GetLayerDefn()
+
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(2435)
+    out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=temp_layer.GetGeomType())
+
+    strField = ogr.FieldDefn("中文", ogr.OFTInteger)
+    out_layer.CreateField(strField, False)  # true表示会根据字段长度限制进行截短
+
+    # for i in range(out_layerDefn.GetFieldCount()):
+    #     fieldDefn = out_layerDefn.GetFieldDefn(i)
+    #     fieldName = fieldDefn.GetName()
+    #     strField = ogr.FieldDefn("中文", ogr.OFTInteger)
+    #     out_layer.CreateField(fieldDefn, True)  # true表示会根据字段长度限制进行截短
 
     i = 0
     record_num = 1
@@ -45,10 +72,9 @@ def main(url, output_path):
         trytime = 0
         while True:
             query_clause = "OBJECTID_1 > " + str(i * num_return) + " and OBJECTID_1 <= " + str((i + 1) * num_return)
-            geoObjs = get_geojson_by_query(url, query_clause)
-            if 'features' in geoObjs.keys():
-                record_num = len(geoObjs['features'])
-                feaColl = feaColl + geoObjs['features']
+            geoObjs = get_json_by_query(url, query_clause)
+            if geoObjs is not None:
+                record_num = geoObjs.getFeatureCount()
                 break
             else:
                 trytime += 1
@@ -75,7 +101,7 @@ def main(url, output_path):
 
 
 #  Post参数到服务器获取geojson对象
-def get_geojson_by_query(url, query_clause):
+def get_json_by_query(url, query_clause):
     # 定义请求头
     reqheaders = {'Content-Type': 'application/x-www-form-urlencoded',
                   'Host': 'suplicmap.pnr.sz',
@@ -85,7 +111,7 @@ def get_geojson_by_query(url, query_clause):
     body_value = {'where': query_clause,
                   'outFields': '*',
                   'outSR': '2435',
-                  'f': 'geojson'}
+                  'f': 'json'}
 
     # 对请求参数进行编码
     data = urllib.parse.urlencode(body_value).encode(encoding='UTF8')
@@ -93,7 +119,16 @@ def get_geojson_by_query(url, query_clause):
     req = urllib.request.Request(url=url, data=data, headers=reqheaders)
     r = urllib.request.urlopen(req)
     respData = r.read().decode('utf-8')
-    geoObjs = geojson.loads(respData)
+
+    # return respData
+    # geoObjs = geojson.loads(respData)
+    esri_json = ogr.GetDriverByName('ESRIJSON')
+    geoObjs = esri_json.Open(respData, 0)
+
+    # layer = geoObjs.GetLayer()
+    # for feature in layer:
+    #     geom = feature.GetGeometryRef()
+    #     print(geom.Centroid().ExportToWkt())
 
     return geoObjs
 

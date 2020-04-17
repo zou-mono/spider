@@ -1,9 +1,8 @@
 # -*- coding: utf8 -*-
 
 from multiprocessing import Pool, cpu_count
-from gevent import monkey
-from gevent.pool import Pool as gpool
-from gevent.queue import Queue
+import multiprocessing
+import random
 import json
 import time, datetime
 from log4p import Log
@@ -19,7 +18,7 @@ num_return = 1000 # 返回条数
 # max_return = 1000000
 log = Log()
 epsg = 2435
-OID_NAME = "OBJECTID"  # FID字段名称
+dateLst = []
 
 @click.command()
 @click.option('--url', '-u',
@@ -46,7 +45,6 @@ OID_NAME = "OBJECTID"  # FID字段名称
     help='Output file geodatabase, need the full path. For example, res/data.gdb',
     required=True)
 def main(url, layer_name, sr, loop_pos, output_path):
-
     start = time.time()
 
     epsg = sr
@@ -59,73 +57,10 @@ def main(url, layer_name, sr, loop_pos, output_path):
 
     log.info("开始创建文件数据库...")
 
-    outdriver=ogr.GetDriverByName('FileGDB')
-    if os.path.exists(output_path):
-        gdb = outdriver.Open(output_path, 1)
-        log.info("文件数据库已存在，在已有数据库基础上创建图层.")
-    else:
-        gdb = outdriver.CreateDataSource(output_path)
-
-    # 向服务器发送一条请求，获取数据字段信息
-    respData = get_json(url_json)
-    if respData is None:
-        log.error('获取数据字段信息失败,无法创建数据库.')
+    gdb, out_layer, OID_NAME = createFileGDB(output_path, layer_name, epsg, url_json)
+    if out_layer is None:
+        log.error("创建数据库失败.\n" + traceback.format_exc())
         return
-
-    geoObjs = json.loads(respData)
-    dateLst = parseDateField(geoObjs)  # 获取日期字段
-    OID = parseOIDField(geoObjs)
-    if OID is None:
-        log.error('获取OID字段信息失败,无法创建数据库.')
-        return
-
-    GeoType = parseGeoTypeField(geoObjs)
-    if GeoType is None:
-        log.error('获取Geometry字段信息失败,无法创建数据库.')
-        return
-
-    srs = osr.SpatialReference()
-    srs.ImportFromEPSG(epsg)
-
-    # out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=temp_layer.GetGeomType(),options=["LAYER_ALIAS=电动"])
-    out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType)
-    # LayerDefn = out_layer.GetLayerDefn()
-    fields = geoObjs['fields']
-
-    i = 0
-    for field in fields:
-        # fieldDefn = out_layerDefn.GetFieldDefn(i)
-        if field['type'] == "esriFieldTypeOID":
-            OID_NAME = field['name']
-            continue
-        if field['type'] == "esriFieldTypeGeometry":
-            continue
-
-        # if field['name'] == "OBJECTID":  # 和默认OBJECTID重名，会加下划线
-        #     iOBJECTID_NUM = i
-
-        OFTtype = parseTypeField(field['type'])
-        new_field = ogr.FieldDefn(field['name'], OFTtype)
-
-        if OFTtype == ogr.OFTString:
-            new_field.SetWidth(field['length'])
-        elif OFTtype == ogr.OFTReal:
-            new_field.SetWidth(18)
-            new_field.SetPrecision(10)
-
-        # LayerDefn.AddFieldDefn(new_field)
-        out_layer.CreateField(new_field, True)  # true表示会根据字段长度限制进行截短
-        i += 1
-
-    defn = out_layer.GetLayerDefn()
-    for i in range(defn.GetFieldCount()):
-        fieldName = defn.GetFieldDefn(i).GetName()
-        fieldTypeCode = defn.GetFieldDefn(i).GetType()
-        fieldType = defn.GetFieldDefn(i).GetFieldTypeName(fieldTypeCode)
-        fieldWidth = defn.GetFieldDefn(i).GetWidth()
-        GetPrecision = defn.GetFieldDefn(i).GetPrecision()
-
-        log.debug(fieldName + " - " + fieldType + " " + str(fieldWidth) + " " + str(GetPrecision))
 
     log.info("文件数据库创建成功.")
     log.info("保存位置为" + os.path.abspath(output_path) + ", 图层名称为" + out_layer.GetName())
@@ -133,8 +68,11 @@ def main(url, layer_name, sr, loop_pos, output_path):
     record_num = 1
     iRow = 0
     log.info('开始抓取数据...')
-    while record_num > 0:
+    TASKS = [(mul, (i, 7)) for i in range(10)] + \
+            [(plus, (i, 8)) for i in range(10)]
 
+    process_pool = Pool(processes=cpu_count())
+    while record_num > 0:
         trytime = 0
         while True:
             query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
@@ -147,34 +85,9 @@ def main(url, layer_name, sr, loop_pos, output_path):
 
                 defn = json_Layer.GetLayerDefn()
                 for feature in json_Layer:  # 将json要素拷贝到gdb中
-                    try:
-                        FID = feature.GetField(OID_NAME)
-                        ofeature = ogr.Feature(out_layer.GetLayerDefn())
-                        ofeature.SetGeometry(feature.GetGeometryRef())
-                        ofeature.SetFID(FID)
-                        if feature.GetField("OBJECTID") is not None:
-                            ofeature.SetField('OBJECTID_', feature.GetField("OBJECTID"))
-
-                        for i in range(defn.GetFieldCount()):
-                            fieldName = defn.GetFieldDefn(i).GetName()
-                            if fieldName == "OBJECTID" or fieldName == OID_NAME:
-                                continue
-
-                            ofeature.SetField(fieldName, feature.GetField(i))
-
-                        for dateField in dateLst:
-
-                                timeArray = time.localtime(int(feature.GetField(dateField))/1000)  # 1970秒数
-                                otherStyleTime = time.strftime("%Y-%m-%d", timeArray)
-                                ofeature.SetField(dateField, otherStyleTime)
-
-
-                        out_layer.CreateFeature(ofeature)
-                        ofeature.Destroy()
-                    except:
-                        log.error("错误发生在FID=" + str(FID) + "\n" + traceback.format_exc())
-                        continue
-
+                    process_pool.apply_async(calculate, TASKS[0])
+                    # process_pool.apply_async(addField, (feature, defn, OID_NAME, out_layer,))
+                    # addField(feature, defn, OID_NAME, out_layer)
                     iRow += 1
                     log.debug(iRow)
                 break
@@ -185,11 +98,130 @@ def main(url, layer_name, sr, loop_pos, output_path):
                     break
         loop_pos += 1
 
+    process_pool.close()
+    process_pool.join()
     outdriver = None
     del gdb
     out_layer = None
     end = time.time()
     log.info('完成抓取.耗时：' + str(end - start))
+
+
+def mul(a, b):
+    time.sleep(0.5*random.random())
+    return a * b
+
+def plus(a, b):
+    time.sleep(0.5*random.random())
+    return a + b
+
+def calculate(func, args):
+    result = func(*args)
+    return '%s says that %s%s = %s' % (
+        multiprocessing.current_process().name,
+        func.__name__, args, result
+    )
+
+
+def addField(feature, defn, OID_NAME, out_layer):
+    try:
+        FID = feature.GetField(OID_NAME)
+        ofeature = ogr.Feature(out_layer.GetLayerDefn())
+        ofeature.SetGeometry(feature.GetGeometryRef())
+        ofeature.SetFID(FID)
+        if feature.GetField("OBJECTID") is not None:
+            ofeature.SetField('OBJECTID_', feature.GetField("OBJECTID"))
+
+        for i in range(defn.GetFieldCount()):
+            fieldName = defn.GetFieldDefn(i).GetName()
+            if fieldName == "OBJECTID" or fieldName == OID_NAME:
+                continue
+
+            ofeature.SetField(fieldName, feature.GetField(i))
+
+        for dateField in dateLst:
+
+            timeArray = time.localtime(int(feature.GetField(dateField))/1000)  # 1970秒数
+            otherStyleTime = time.strftime("%Y-%m-%d", timeArray)
+            ofeature.SetField(dateField, otherStyleTime)
+
+        out_layer.CreateFeature(ofeature)
+        ofeature.Destroy()
+    except:
+        log.error("错误发生在FID=" + str(FID) + "\n" + traceback.format_exc())
+
+
+def createFileGDB(output_path, layer_name, epsg, url_json):
+    try:
+        outdriver=ogr.GetDriverByName('FileGDB')
+        if os.path.exists(output_path):
+            gdb = outdriver.Open(output_path, 1)
+            log.info("文件数据库已存在，在已有数据库基础上创建图层.")
+        else:
+            gdb = outdriver.CreateDataSource(output_path)
+
+            # 向服务器发送一条请求，获取数据字段信息
+        respData = get_json(url_json)
+        if respData is None:
+            log.error('获取数据字段信息失败,无法创建数据库.')
+            return
+
+        geoObjs = json.loads(respData)
+        dateLst = parseDateField(geoObjs)  # 获取日期字段
+        OID = parseOIDField(geoObjs)
+        if OID is None:
+            log.error('获取OID字段信息失败,无法创建数据库.')
+            return
+
+        GeoType = parseGeoTypeField(geoObjs)
+        if GeoType is None:
+            log.error('获取Geometry字段信息失败,无法创建数据库.')
+            return
+
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(epsg)
+
+        # out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=temp_layer.GetGeomType(),options=["LAYER_ALIAS=电动"])
+        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType)
+        # LayerDefn = out_layer.GetLayerDefn()
+        fields = geoObjs['fields']
+
+        i = 0
+        for field in fields:
+            # fieldDefn = out_layerDefn.GetFieldDefn(i)
+            if field['type'] == "esriFieldTypeOID":
+                OID_NAME = field['name']
+                continue
+            if field['type'] == "esriFieldTypeGeometry":
+                continue
+
+            OFTtype = parseTypeField(field['type'])
+            new_field = ogr.FieldDefn(field['name'], OFTtype)
+
+            if OFTtype == ogr.OFTString:
+                new_field.SetWidth(field['length'])
+            elif OFTtype == ogr.OFTReal:
+                new_field.SetWidth(18)
+                new_field.SetPrecision(10)
+
+            # LayerDefn.AddFieldDefn(new_field)
+            out_layer.CreateField(new_field, True)  # true表示会根据字段长度限制进行截短
+            i += 1
+
+        defn = out_layer.GetLayerDefn()
+        for i in range(defn.GetFieldCount()):
+            fieldName = defn.GetFieldDefn(i).GetName()
+            fieldTypeCode = defn.GetFieldDefn(i).GetType()
+            fieldType = defn.GetFieldDefn(i).GetFieldTypeName(fieldTypeCode)
+            fieldWidth = defn.GetFieldDefn(i).GetWidth()
+            GetPrecision = defn.GetFieldDefn(i).GetPrecision()
+
+            log.debug(fieldName + " - " + fieldType + " " + str(fieldWidth) + " " + str(GetPrecision))
+
+        return gdb, out_layer, OID_NAME
+    except:
+        # log.error("创建数据库失败.\n" + traceback.format_exc())
+        return None
 
 
 def get_json(url):

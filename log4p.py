@@ -57,8 +57,8 @@ class Log:
                     now = datetime.datetime(int(now_list[0]), int(now_list[1]), int(now_list[2]))
                     if (now - t).days > 6:  # 创建时间大于6天的文件删除
                         self.delete_logs(file_path)
-                if len(file_list) > 4:  # 限制目录下记录文件数量
-                    file_list = file_list[0:-4]
+                if len(file_list) > 10:  # 限制目录下记录文件数量
+                    file_list = file_list[0:-10]
                     for i in file_list:
                         file_path = os.path.join(dirPath, i)
                         print(file_path)

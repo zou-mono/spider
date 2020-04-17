@@ -89,12 +89,20 @@ def get_geojson_by_query(url, query_clause):
     # 对请求参数进行编码
     data = urllib.parse.urlencode(body_value).encode(encoding='UTF8')
     # 请求不同页面的数据
-    req = urllib.request.Request(url=url, data=data, headers=reqheaders)
-    r = urllib.request.urlopen(req)
-    respData = r.read().decode('utf-8')
-    geoObjs = geojson.loads(respData)
+    trytime = 0
+    while trytime < 10:
+        try:
+            req = urllib.request.Request(url=url, data=data, headers=reqheaders)
+            r = urllib.request.urlopen(req)
+            respData = r.read().decode('utf-8')
+            geoObjs = geojson.loads(respData)
+            return geoObjs
+        except:
+            log.error(u'HTTP请求失败！正在准备重发...')
+            trytime += 1
 
-    return geoObjs
+        time.sleep(2)
+        continue
 
 
 if __name__ == '__main__':

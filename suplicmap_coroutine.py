@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from multiprocessing import Pool, cpu_count
-import multiprocessing
-import random
+import asyncio
+import aiohttp
 import json
 import time, datetime
 from log4p import Log
@@ -12,12 +11,12 @@ from osgeo import ogr
 import osgeo.osr as osr
 import click
 import traceback
-import csv
+from asyncRequest import send_http
 
 try_num = 10
 num_return = 1000 # 返回条数
 # max_return = 1000000
-log = Log()
+log = Log(__file__)
 epsg = 2435
 dateLst = []
 
@@ -69,41 +68,42 @@ def main(url, layer_name, sr, loop_pos, output_path):
     record_num = 1
     iRow = 0
     log.info('开始抓取数据...')
-    # TASKS = [(mul, (i, 7)) for i in range(10)] + \
-    #         [(plus, (i, 8)) for i in range(10)]
 
-    # process_pool = Pool(processes=cpu_count())
+    loop = asyncio.get_event_loop()
+    tasks = []
+    # while record_num > 0:
+    #     trytime = 0
+    #     while True:
     for loop_pos in range(0, 8):
         query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
-        respData = get_json_by_query(query_url, query_clause)
-        log.debug(loop_pos)
+        # respData = await get_json_by_query_async(query_url, query_clause)
+        tasks.append(asyncio.ensure_future(get_json_by_query_async(query_url, query_clause)))
+            # esri_json = ogr.GetDriverByName('ESRIJSON')
+            # geoObjs = esri_json.Open(respData, 0)
+            # if geoObjs is not None:
+            #     json_Layer = geoObjs.GetLayer()
+            #     record_num = json_Layer.GetFeatureCount()
+            #
+            #     defn = json_Layer.GetLayerDefn()
+            #     for feature in json_Layer:  # 将json要素拷贝到gdb中
+            #         # process_pool.apply_async(calculate, TASKS[0])
+            #         # process_pool.apply_async(addField, (feature, defn, OID_NAME, out_layer,))
+            #         # addField(feature, defn, OID_NAME, out_layer)
+            #         # process_pool.apply_async(test, (iRow,))
+            #         iRow += 1
+            #         log.debug(iRow)
+            #     break
+            # else:
+            #     trytime += 1
+            #     if trytime > try_num:
+            #         log.error('数据抓取失败. error in ' + query_clause)
+            #         break
 
-    # while record_num > 0:
-        trytime = 0
-    #     while True:
-    #         query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
-    #         respData = get_json_by_query(query_url, query_clause)
-        esri_json = ogr.GetDriverByName('ESRIJSON')
-        geoObjs = esri_json.Open(respData, 0)
-        if geoObjs is not None:
-            json_Layer = geoObjs.GetLayer()
-            record_num = json_Layer.GetFeatureCount()
 
-            defn = json_Layer.GetLayerDefn()
-            for feature in json_Layer:  # 将json要素拷贝到gdb中
-                # process_pool.apply_async(calculate, TASKS[0])
-                # process_pool.apply_async(addField, (feature, defn, OID_NAME, out_layer,))
-                addField(feature, defn, OID_NAME, out_layer)
-                # process_pool.apply_async(test, (iRow,))
-                iRow += 1
-                log.debug(iRow)
-            # break
-        else:
-            trytime += 1
-            if trytime > try_num:
-                log.error('数据抓取失败. error in ' + query_clause)
-                break
-    #     loop_pos += 1
+            # tasks = [asyncio.ensure_future(job(url, query_clause)) for url in urls]
+        # loop_pos += 1
+
+    loop.run_until_complete(asyncio.wait(tasks))
 
     # process_pool.close()
     # process_pool.join()
@@ -113,24 +113,6 @@ def main(url, layer_name, sr, loop_pos, output_path):
     end = time.time()
     log.info('完成抓取.耗时：' + str(end - start))
 
-
-def mul(a, b):
-    time.sleep(0.5*random.random())
-    return a * b
-
-def plus(a, b):
-    time.sleep(0.5*random.random())
-    return a + b
-
-def calculate(func, args):
-    result = func(*args)
-    return '%s says that %s%s = %s' % (
-        multiprocessing.current_process().name,
-        func.__name__, args, result
-    )
-
-def test(x):
-    print(x^2)
 
 def addField(feature, defn, OID_NAME, out_layer):
     try:
@@ -286,6 +268,37 @@ def get_json_by_query(url, query_clause):
         time.sleep(2)
         continue
     return None
+
+
+#  Post参数到服务器获取geojson对象
+async def get_json_by_query_async(url, query_clause):
+    # 定义请求头
+    reqheaders = {'Content-Type': 'application/x-www-form-urlencoded',
+                  'Host': 'suplicmap.pnr.sz',
+                  'Pragma': 'no-cache'}
+
+    # 定义post的参数
+    body_value = {'where': query_clause,
+                  'outFields': '*',
+                  'outSR': str(epsg),
+                  'f': 'json'}
+
+    # 对请求参数进行编码
+    data = urllib.parse.urlencode(body_value).encode(encoding='UTF8')
+
+    async with aiohttp.ClientSession() as session:
+        respData = await send_http(session, method="post", url=url, respond_Type="text", data=data, headers=reqheaders, retries=5)
+        # response = await session.post(url, data=data, headers=reqheaders)
+        esri_json = ogr.GetDriverByName('ESRIJSON')
+        geoObjs = esri_json.Open(respData, 0)
+        json_Layer = geoObjs.GetLayer()
+        record_num = json_Layer.GetFeatureCount()
+        log.debug(record_num)
+
+        return geoObjs
+
+# async def handle_data():
+
 
 
 def parseDateField(fields):

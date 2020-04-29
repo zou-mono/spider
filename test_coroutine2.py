@@ -2,6 +2,7 @@ import asyncio
 import time
 import aiohttp
 import ssl
+from asyncRequest import send_http
 
 from bs4 import BeautifulSoup
 
@@ -11,8 +12,11 @@ urls = ['https://movie.douban.com/top250?start={}&filter=>'.format(i) for i in r
 
 async def fetch(url):
     async with aiohttp.ClientSession() as session:
-        response = await session.get(url)
-        return await response.text()
+        response = await send_http(session, method="get", url=url, retries=5)
+        return response
+    # async with aiohttp.ClientSession() as session:
+    #     response = await session.get(url)
+    #     return await response.text()
 
 
 async def job(url):

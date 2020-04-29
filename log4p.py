@@ -4,7 +4,22 @@ from logging.handlers import RotatingFileHandler # 按文件大小滚动备份
 import colorlog  # 控制台日志输入颜色
 import time
 import datetime
-import os
+import os, sys, io
+import traceback
+
+currentframe = lambda: sys._getframe(3)
+_logging_srcfile = os.path.normcase(logging.addLevelName.__code__.co_filename)
+_this_srcfile = __file__
+#Get both logger's and this file's path so the wrapped logger can tell when its looking at the code stack outside of this file.
+_loggingfile = os.path.normcase(logging.__file__)
+if hasattr(sys, 'frozen'): #support for py2exe
+    _srcfile = "logging%s__init__%s" % (os.sep, __file__[-4:])
+elif __file__[-4:].lower() in ['.pyc', '.pyo']:
+    _srcfile = __file__[:-4] + '.py'
+else:
+    _srcfile = __file__
+_srcfile = os.path.normcase(_srcfile)
+_wrongCallerFiles = set([_loggingfile, _srcfile])
 
 cur_path = os.path.dirname(os.path.realpath(__file__))  # log_path是存放日志的路径
 log_path = os.path.join(cur_path, 'logs')
@@ -22,8 +37,10 @@ log_colors_config = {
 
 class Log:
     def __init__(self, logName=logName):
-        self.logName = logName
-        self.logger = logging.getLogger()
+        logging.setLoggerClass(WrappedLogger)  # 重新绑定logging实例
+        filename = os.path.basename(logName).split('.')[0]
+        self.logName = os.path.join(log_path, '%s.log' % (os.path.basename(logName).split('.')[0] + '_' + time.strftime('%Y-%m-%d-%H-%M-%S')))
+        self.logger = logging.getLogger(filename)
         self.logger.setLevel(logging.DEBUG)
         self.handle_logs()
 
@@ -45,7 +62,7 @@ class Log:
         """处理日志过期天数和文件数量"""
         dir_list = ['logs']  # 要删除文件的目录名
         for dir in dir_list:
-            dirPath = os.path.dirname(__file__) + '\\' + dir  # 拼接删除目录完整路径
+            dirPath = os.path.dirname(self.logName)   # 拼接删除目录完整路径
             file_list = self.get_file_sorted(dirPath)  # 返回按修改时间排序的文件list
             if file_list:  # 目录下没有日志文件
                 for i in file_list:
@@ -55,14 +72,14 @@ class Log:
                     t = datetime.datetime(int(t_list[0]), int(t_list[1]),
                                           int(t_list[2]))  # 将时间转换成datetime.datetime 类型
                     now = datetime.datetime(int(now_list[0]), int(now_list[1]), int(now_list[2]))
-                    if (now - t).days > 6:  # 创建时间大于6天的文件删除
+                    if (now - t).days > 10:  # 创建时间大于10天的文件删除
                         self.delete_logs(file_path)
-                if len(file_list) > 10:  # 限制目录下记录文件数量
-                    file_list = file_list[0:-10]
-                    for i in file_list:
-                        file_path = os.path.join(dirPath, i)
-                        print(file_path)
-                        self.delete_logs(file_path)
+                # if len(file_list) > 10:  # 限制目录下记录文件数量
+                #     file_list = file_list[0:-10]
+                #     for i in file_list:
+                #         file_path = os.path.join(dirPath, i)
+                #         print(file_path)
+                #         self.delete_logs(file_path)
 
     def delete_logs(self, file_path):
         try:
@@ -113,6 +130,52 @@ class Log:
 
     def error(self, message):
         self.__console('error', message)
+
+
+class WrappedLogger(logging.getLoggerClass()):
+    def __init__(self, name, level=logging.NOTSET):
+        super(WrappedLogger, self).__init__(name, level)
+
+    def your_function(self, msg, *args, **kwargs):
+        # whatever you want to do here...
+        self._log(12, msg, args, **kwargs)
+
+    def add_handler(self, hdlr):
+        pass
+        # self.addHandler(hdlr)
+        # return hdlr
+
+    def findCaller(self, stack_info=False):
+        """
+        Find the stack frame of the caller so that we can note the source
+        file name, line number and function name.
+
+        This function comes straight from the original python one
+        """
+        f = currentframe()
+        # On some versions of IronPython, currentframe() returns None if
+        # IronPython isn't run with -X:Frames.
+        if f is not None:
+            f = f.f_back
+        rv = "(unknown file)", 0, "(unknown function)"
+        while hasattr(f, "f_code"):
+            co = f.f_code
+            filename = os.path.normcase(co.co_filename)
+            if filename == _srcfile:
+                f = f.f_back
+                continue
+            sinfo = None
+            if stack_info:
+                sio = io.StringIO()
+                sio.write('Stack (most recent call last):\n')
+                traceback.print_stack(f, file=sio)
+                sinfo = sio.getvalue()
+                if sinfo[-1] == '\n':
+                    sinfo = sinfo[:-1]
+                sio.close()
+            rv = (co.co_filename, f.f_lineno, co.co_name, sinfo)
+            break
+        return rv
 
 
 if __name__ == "__main__":

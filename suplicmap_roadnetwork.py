@@ -1,4 +1,4 @@
-# -*- coding: utf8 -*-
+# -*- coding: utf-8 -*-
 
 from multiprocessing import Pool, cpu_count
 from gevent import monkey
@@ -17,8 +17,8 @@ import traceback
 try_num = 10
 num_return = 1000 # 返回条数
 # max_return = 1000000
-log = Log()
-epsg = 2435
+log = Log(__file__)
+# epsg = 2435
 OID_NAME = "OBJECTID"  # FID字段名称
 
 @click.command()
@@ -29,12 +29,12 @@ OID_NAME = "OBJECTID"  # FID字段名称
     '--layer-name', '-n',
     help='Output layer name, which is shown in geodatabase. For example, 道路面',
     required=True)
-@click.option(
-    '--sr', '-s',
-    help='srs EPSG ID. For example, 2435',
-    type=int,
-    default=2435,
-    required=False)
+# @click.option(
+#     '--sr', '-s',
+#     help='srs EPSG ID. For example, 2435',
+#     type=int,
+#     default=2435,
+#     required=False)
 @click.option(
     '--loop-pos', '-l',
     help='Start loop position. For example, 0',
@@ -46,10 +46,10 @@ OID_NAME = "OBJECTID"  # FID字段名称
     help='Output file geodatabase, need the full path. For example, res/data.gdb',
     required=True)
 def main(url, layer_name, sr, loop_pos, output_path):
-
+    """crawler program for vector data in http://suplicmap.pnr.sz."""
     start = time.time()
 
-    epsg = sr
+    # epsg = sr
     if url[-1] == r"/":
         query_url = url + "query"
         url_json = url[:-1] + "?f=pjson"
@@ -73,6 +73,7 @@ def main(url, layer_name, sr, loop_pos, output_path):
         return
 
     geoObjs = json.loads(respData)
+    epsg = geoObjs['sourceSpatialReference']['wkid']
     dateLst = parseDateField(geoObjs)  # 获取日期字段
     OID = parseOIDField(geoObjs)
     if OID is None:
@@ -138,7 +139,7 @@ def main(url, layer_name, sr, loop_pos, output_path):
         trytime = 0
         while True:
             query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
-            respData = get_json_by_query(query_url, query_clause)
+            respData = get_json_by_query(query_url, query_clause, epsg)
             esri_json = ogr.GetDriverByName('ESRIJSON')
             geoObjs = esri_json.Open(respData, 0)
             if geoObjs is not None:
@@ -216,7 +217,7 @@ def get_json(url):
 
 
 #  Post参数到服务器获取geojson对象
-def get_json_by_query(url, query_clause):
+def get_json_by_query(url, query_clause, epsg):
     # 定义请求头
     reqheaders = {'Content-Type': 'application/x-www-form-urlencoded',
                   'Host': 'suplicmap.pnr.sz',

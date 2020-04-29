@@ -114,6 +114,7 @@ def main(input_folder, scope, origin, resolution, tilesize, merged_file):
                 gdal.GCP(maxX, minY, 0, gcp_x1, gcp_y1)]
 
     tmp_ds = gdal.Open(temp_file, 1)
+    # gdal的config放在creationOptions参数里面
     translateOptions = gdal.TranslateOptions(format='GTiff', creationOptions=["BIGTIFF=YES", "COMPRESS=LZW"], GCPs=gcp_list)
     gdal.Translate(merged_file, tmp_ds, options=translateOptions)
     tmp_ds = None
@@ -122,7 +123,7 @@ def main(input_folder, scope, origin, resolution, tilesize, merged_file):
     log.info("开始构建影像金字塔...")
     out_ds = gdal.OpenEx(merged_file, gdal.OF_RASTER | gdal.OF_READONLY)
     gdal.SetConfigOption('COMPRESS_OVERVIEW', 'LZW')
-    out_ds.BuildOverviews("nearest", range(2, 16, 2))  # 第二个参数表示建立多少级金字塔
+    out_ds.BuildOverviews("nearest", range(2, 16, 2))  # 第二个参数表示建立多少级金字塔, QGIS里面默认是2,4,8,16
     out_ds=None
     log.info("影像金字塔构建成功.")
 

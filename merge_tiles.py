@@ -97,7 +97,7 @@ def main(input_folder, scope, origin, resolution, tilesize, merged_file):
             icount += 1
             # print(icount)
             if icount % 1000 == 0:
-                print(icount)
+                log.debug(icount)
     log.info('拼接完成.')
     out_ds = None
     dr = None
@@ -128,7 +128,7 @@ def main(input_folder, scope, origin, resolution, tilesize, merged_file):
     log.info("影像金字塔构建成功.")
 
     end = time.time()
-    print("所有操作OK!耗时" + str(end - start))
+    log.info("所有操作OK!耗时" + str(end - start))
 
 
 def get_col_row(x0, y0, x, y, size, resolution):

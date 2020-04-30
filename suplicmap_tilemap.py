@@ -1,17 +1,13 @@
 import time
 import aiohttp
 import asyncio
-import logging
 from log4p import Log
 import urllib.request, urllib.parse
 import json
 import os
 import math
-from osgeo import ogr
-import osgeo.osr as osr
 import click
 import traceback
-import PIL.Image as Image
 from asyncRequest import send_http
 
 try_num = 10
@@ -95,12 +91,13 @@ def main(url, file_name, sr, level, output_path):
             # tile_url = url + "/tile/" + str(level) + "/" + str(i) + "/" + str(j)
             tile_url = f'{url}/tile/{level}/{i}/{j}'
 
-            if itask > 3000:
+            if itask >= 3000:
                 loop.run_until_complete(asyncio.wait(tasks))
                 tasks = []
                 itask = 0
                 iloop += 1
-                print(iloop)
+                log.debug(iloop)
+                continue
             else:
                 tasks.append(asyncio.ensure_future(output_img_asyc(tile_url, level_path, i, j)))
             itask += 1

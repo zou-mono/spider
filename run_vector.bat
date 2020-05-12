@@ -1,4 +1,4 @@
-python suplicmap_vector.py -u "http://suplicmap.pnr.sz/dynaszmap_1/rest/services/bdcj_1/MapServer/0" -o "res/suplicmap.gdb"
+python suplicmap_vector.py -u "http://suplicmap.pnr.sz/dynaszmap_2/rest/services/PLAN_ZG_2020/MapServer/0" -l 12 -o "res/res.gdb"
 python suplicmap_vector.py -u "http://suplicmap.pnr.sz/dynaszmap_1/rest/services/bdcj_1/MapServer/1" -o "res/suplicmap.gdb"
 python suplicmap_vector.py -u "http://suplicmap.pnr.sz/dynaszmap_1/rest/services/bdcj_1/MapServer/2" -o "res/suplicmap.gdb"
 python suplicmap_vector.py -u "http://suplicmap.pnr.sz/dynaszmap_1/rest/services/bdcj_1/MapServer/3" -o "res/suplicmap.gdb"

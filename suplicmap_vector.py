@@ -12,12 +12,13 @@ import traceback
 import re
 
 try_num = 5
-num_return = 1000 # 返回条数
+num_return = 1000  # 返回条数
 # max_return = 1000000
 log = Log(__file__)
 epsg = 2435
 dateLst = []
 OID_NAME = "OBJECTID"  # FID字段名称
+
 
 @click.command()
 @click.option('--url', '-u',
@@ -73,33 +74,38 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
     iRow = 0
     log.info('开始抓取数据...')
 
-    while record_num > 0:
-        trytime = 0
-        while True:
-            # query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
-            line1 = loop_pos * num_return
-            line2 = (loop_pos + 1) * num_return
-            query_clause = f'{OID_NAME} > {line1} and {OID_NAME} <= {line2}'
-            esri_json = ogr.GetDriverByName('ESRIJSON')
-            respData = get_json_by_query(query_url, query_clause, epsg)
-            geoObjs = esri_json.Open(respData, 0)
-            if geoObjs is not None:
-                json_Layer = geoObjs.GetLayer()
-                record_num = json_Layer.GetFeatureCount()
+    bStart = False
+    if not checkEmpty(query_url):  # 首先判断一下是否有要素，如果有则不停循环直到找到起始位置，再开始抓取
+        while record_num > 0 or bStart is False:
+            trytime = 0
+            while True:
+                # query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
+                line1 = loop_pos * num_return
+                line2 = (loop_pos + 1) * num_return
+                query_clause = f'{OID_NAME} > {line1} and {OID_NAME} <= {line2}'
+                esri_json = ogr.GetDriverByName('ESRIJSON')
+                respData = get_json_by_query(query_url, query_clause, epsg)
+                geoObjs = esri_json.Open(respData, 0)
+                if geoObjs is not None:
+                    json_Layer = geoObjs.GetLayer()
+                    record_num = json_Layer.GetFeatureCount()
 
-                defn = json_Layer.GetLayerDefn()
-                for feature in json_Layer:  # 将json要素拷贝到gdb中
-                    addField(feature, defn, OID_NAME, out_layer)
-                    iRow += 1
-                    # log.debug(iRow)
-                break
-            else:
-                trytime += 1
-                if trytime > try_num:
-                    log.error('数据抓取失败. error in ' + query_clause)
+                    if record_num > 0:
+                        bStart = True
+
+                    defn = json_Layer.GetLayerDefn()
+                    for feature in json_Layer:  # 将json要素拷贝到gdb中
+                        addField(feature, defn, OID_NAME, out_layer)
+                        iRow += 1
+                        # log.debug(iRow)
                     break
+                else:
+                    trytime += 1
+                    if trytime > try_num:
+                        log.error('数据抓取失败. error in ' + query_clause)
+                        break
 
-        loop_pos += 1
+            loop_pos += 1
 
     outdriver = None
     del gdb
@@ -107,6 +113,20 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
     end = time.time()
     log.info('完成抓取.耗时：' + str(end - start))
     return True
+
+
+def checkEmpty(query_url):
+    respData = get_json_by_query(query_url, '1=1', epsg)
+    esri_json = ogr.GetDriverByName('ESRIJSON')
+    geoObjs = esri_json.Open(respData, 0)
+    if geoObjs is None:
+        return True
+
+    json_Layer = geoObjs.GetLayer()
+    record_num = json_Layer.GetFeatureCount()
+
+    return True if record_num == 0 else False
+
 
 def addField(feature, defn, OID_NAME, out_layer):
     FID = -1
@@ -118,7 +138,6 @@ def addField(feature, defn, OID_NAME, out_layer):
         if feature.GetField("OBJECTID") is not None and OID_NAME != 'OBJECTID':
             ofeature.SetField('OBJECTID_', feature.GetField("OBJECTID"))
 
-
         for i in range(defn.GetFieldCount()):
             fieldName = check_name(defn.GetFieldDefn(i).GetName())
             if fieldName == "OBJECTID" or fieldName == OID_NAME:
@@ -127,7 +146,7 @@ def addField(feature, defn, OID_NAME, out_layer):
             ofeature.SetField(fieldName, feature.GetField(i))
 
         for dateField in dateLst:
-            timeArray = time.localtime(int(feature.GetField(dateField))/1000)  # 1970秒数
+            timeArray = time.localtime(int(feature.GetField(dateField)) / 1000)  # 1970秒数
             otherStyleTime = time.strftime("%Y-%m-%d", timeArray)
             ofeature.SetField(dateField, otherStyleTime)
 
@@ -139,7 +158,7 @@ def addField(feature, defn, OID_NAME, out_layer):
 
 def createFileGDB(output_path, layer_name, epsg, url_json):
     try:
-        outdriver=ogr.GetDriverByName('FileGDB')
+        outdriver = ogr.GetDriverByName('FileGDB')
         if os.path.exists(output_path):
             gdb = outdriver.Open(output_path, 1)
             log.info("文件数据库已存在，在已有数据库基础上创建图层.")
@@ -286,6 +305,7 @@ def parseDateField(fields):
         order += 1
     return DateFields
 
+
 def parseOIDField(fields):
     fields = fields['fields']
     order = 0
@@ -294,6 +314,7 @@ def parseOIDField(fields):
             return [order, field['name']]
         order += 1
     return None
+
 
 def parseGeoTypeField(fields):
     GeoType = fields['geometryType']
@@ -333,4 +354,3 @@ def parseTypeField(FieldType):
 if __name__ == '__main__':
     ogr.UseExceptions()
     main()
-

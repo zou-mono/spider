@@ -71,7 +71,7 @@ def main(service_url, layer_name, sr, start_service, start_layer, loop_pos, outp
                 layer = layers[j]
                 layerName = layer['name']
                 url = mapservice_url + "/" + str(layer['id'])
-                log.info(f'正在爬取{serviceName}服务的{layerName}图层.{url}')
+                log.info(f'正在爬取{serviceName}服务({i})的{layerName}图层({j}).{url}')
                 if not crawl(url=url, layer_name=None, sr=sr, loop_pos=loop_pos, output_path=output_path):
                     log.error('爬取失败!')
             except:

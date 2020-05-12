@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from multiprocessing import Pool, cpu_count
-from gevent import monkey
-from gevent.pool import Pool as gpool
-from gevent.queue import Queue
 import json
-import time, datetime
+import time
 from log4p import Log
 import urllib.request, urllib.parse
 import os
@@ -13,6 +9,7 @@ from osgeo import ogr
 import osgeo.osr as osr
 import click
 import traceback
+import re
 
 try_num = 5
 num_return = 1000 # 返回条数
@@ -29,7 +26,7 @@ OID_NAME = "OBJECTID"  # FID字段名称
 @click.option(
     '--layer-name', '-n',
     help='Output layer name, which is shown in geodatabase. For example, 道路面',
-    required=True)
+    required=False)
 @click.option(
     '--sr', '-s',
     help='srs EPSG ID. For example, 2435',
@@ -48,6 +45,10 @@ OID_NAME = "OBJECTID"  # FID字段名称
     required=True)
 def main(url, layer_name, sr, loop_pos, output_path):
     """crawler program for vector data in http://suplicmap.pnr.sz."""
+    crawl(url, layer_name, sr, loop_pos, output_path)
+
+
+def crawl(url, layer_name, sr, loop_pos, output_path):
     start = time.time()
 
     epsg = sr
@@ -61,9 +62,9 @@ def main(url, layer_name, sr, loop_pos, output_path):
     log.info("开始创建文件数据库...")
 
     gdb, out_layer, OID_NAME = createFileGDB(output_path, layer_name, epsg, url_json)
-    if out_layer is None:
-        log.error("创建数据库失败.\n" + traceback.format_exc())
-        return
+    if out_layer is None or gdb is None:
+        # log.error("创建数据库失败.\n" + traceback.format_exc())
+        return False
 
     log.info("文件数据库创建成功.")
     log.info("保存位置为" + os.path.abspath(output_path) + ", 图层名称为" + out_layer.GetName())
@@ -75,7 +76,10 @@ def main(url, layer_name, sr, loop_pos, output_path):
     while record_num > 0:
         trytime = 0
         while True:
-            query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
+            # query_clause = OID_NAME + " > " + str(loop_pos * num_return) + " and " + OID_NAME + " <= " + str((loop_pos + 1) * num_return)
+            line1 = loop_pos * num_return
+            line2 = (loop_pos + 1) * num_return
+            query_clause = f'{OID_NAME} > {line1} and {OID_NAME} <= {line2}'
             esri_json = ogr.GetDriverByName('ESRIJSON')
             respData = get_json_by_query(query_url, query_clause, epsg)
             geoObjs = esri_json.Open(respData, 0)
@@ -102,19 +106,21 @@ def main(url, layer_name, sr, loop_pos, output_path):
     out_layer = None
     end = time.time()
     log.info('完成抓取.耗时：' + str(end - start))
-
+    return True
 
 def addField(feature, defn, OID_NAME, out_layer):
+    FID = -1
     try:
         FID = feature.GetField(OID_NAME)
         ofeature = ogr.Feature(out_layer.GetLayerDefn())
         ofeature.SetGeometry(feature.GetGeometryRef())
         ofeature.SetFID(FID)
-        if feature.GetField("OBJECTID") is not None:
+        if feature.GetField("OBJECTID") is not None and OID_NAME != 'OBJECTID':
             ofeature.SetField('OBJECTID_', feature.GetField("OBJECTID"))
 
+
         for i in range(defn.GetFieldCount()):
-            fieldName = defn.GetFieldDefn(i).GetName()
+            fieldName = check_name(defn.GetFieldDefn(i).GetName())
             if fieldName == "OBJECTID" or fieldName == OID_NAME:
                 continue
 
@@ -158,6 +164,9 @@ def createFileGDB(output_path, layer_name, epsg, url_json):
             log.error('获取Geometry字段信息失败,无法创建数据库.')
             return
 
+        if layer_name is None:
+            layer_name = check_name(geoObjs['name'])
+
         srs = osr.SpatialReference()
         srs.ImportFromEPSG(epsg)
 
@@ -170,13 +179,13 @@ def createFileGDB(output_path, layer_name, epsg, url_json):
         for field in fields:
             # fieldDefn = out_layerDefn.GetFieldDefn(i)
             if field['type'] == "esriFieldTypeOID":
-                OID_NAME = field['name']
+                OID_NAME = check_name(field['name'])
                 continue
             if field['type'] == "esriFieldTypeGeometry":
                 continue
 
             OFTtype = parseTypeField(field['type'])
-            new_field = ogr.FieldDefn(field['name'], OFTtype)
+            new_field = ogr.FieldDefn(check_name(field['name']), OFTtype)
 
             if OFTtype == ogr.OFTString:
                 new_field.SetWidth(field['length'])
@@ -200,8 +209,15 @@ def createFileGDB(output_path, layer_name, epsg, url_json):
 
         return gdb, out_layer, OID_NAME
     except:
-        # log.error("创建数据库失败.\n" + traceback.format_exc())
-        return None
+        log.error("创建数据库失败.\n" + traceback.format_exc())
+        return None, None, ""
+
+
+def check_name(name):
+    p1 = r'[-!&<>"\'?@=$~^`#%*()/\\:;{}\[\]|+.]'
+    res = re.sub(p1, '_', name)
+    p2 = r'( +)'
+    return re.sub(p2, '', res)
 
 
 def get_json(url):
@@ -313,5 +329,8 @@ def parseTypeField(FieldType):
     else:
         return None
 
+
 if __name__ == '__main__':
+    ogr.UseExceptions()
     main()
+

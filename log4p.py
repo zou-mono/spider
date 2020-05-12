@@ -6,6 +6,7 @@ import time
 import datetime
 import os, sys, io
 import traceback
+import gdal
 
 currentframe = lambda: sys._getframe(3)
 _logging_srcfile = os.path.normcase(logging.addLevelName.__code__.co_filename)
@@ -33,6 +34,18 @@ log_colors_config = {
     'ERROR': 'red',
     'CRITICAL': 'red',
 }
+
+
+class GdalErrorHandler(object):
+    def __init__(self):
+        self.err_level=gdal.CE_None
+        self.err_no=0
+        self.err_msg=''
+
+    def handler(self, err_level, err_no, err_msg):
+        self.err_level=err_level
+        self.err_no=err_no
+        self.err_msg=err_msg
 
 
 class Log:

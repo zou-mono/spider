@@ -4,6 +4,7 @@ from log4p import Log
 import time
 import click
 import math
+import traceback
 
 log = Log(__file__)
 
@@ -62,10 +63,10 @@ def main(input_folder, scope, origin, resolution, tilesize, merged_file):
     if os.path.exists(temp_file):
         os.remove(temp_file)
 
-    log.info('开始创建merged_file...')
-    dr = gdal.GetDriverByName("GTiff")
-    out_ds = dr.Create(temp_file, tilewidth * tilesize, tileheight * tilesize, 3, gdal.GDT_Int16, options=["BIGTIFF=YES", "COMPRESS=LZW", "TILED=YES", "INTERLEAVE=PIXEL"])
-    log.info('创建成功.')
+    out_ds = create_merge_file(temp_file, tilewidth, tileheight, tilesize)
+
+    if out_ds is None:
+        return
 
     out_r = out_ds.GetRasterBand(1)
     out_g = out_ds.GetRasterBand(2)
@@ -131,6 +132,18 @@ def main(input_folder, scope, origin, resolution, tilesize, merged_file):
     log.info("所有操作OK!耗时" + str(end - start))
 
 
+def create_merge_file(temp_file, tilewidth, tileheight, tilesize):
+    try:
+        log.info('开始创建merged_file...')
+        dr = gdal.GetDriverByName("GTiff")
+        out_ds = dr.Create(temp_file, tilewidth * tilesize, tileheight * tilesize, 3, gdal.GDT_Int16, options=["BIGTIFF=YES", "COMPRESS=LZW", "TILED=YES", "INTERLEAVE=PIXEL"])
+        log.info('创建成功.')
+        return out_ds
+    except:
+        log.error('创建失败!' + traceback.format_exc())
+        return None
+
+
 def get_col_row(x0, y0, x, y, size, resolution):
     col = math.floor(math.fabs((x0 - x) / (size * resolution)))
     row = math.floor(math.fabs((y0 - y) / (size * resolution)))
@@ -139,4 +152,5 @@ def get_col_row(x0, y0, x, y, size, resolution):
 
 
 if __name__ == '__main__':
+    gdal.UseExceptions()
     main()

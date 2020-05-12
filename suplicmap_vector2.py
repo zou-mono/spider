@@ -10,14 +10,26 @@ import osgeo.osr as osr
 import click
 import traceback
 import re
+import aiohttp
+import asyncio
+from asyncRequest import send_http
 
 try_num = 5
 num_return = 1000  # 返回条数
 # max_return = 1000000
 log = Log(__file__)
+failed_urls = []
+lock = asyncio.Lock()
+
 epsg = 2435
 dateLst = []
 OID_NAME = "OBJECTID"  # FID字段名称
+
+# 定义请求头
+reqheaders = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36 Edg/81.0.416.72',
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Host': 'suplicmap.pnr.sz',
+              'Pragma': 'no-cache'}
 
 
 @click.command()
@@ -52,7 +64,9 @@ def main(url, layer_name, sr, loop_pos, output_path):
 def crawl(url, layer_name, sr, loop_pos, output_path):
     start = time.time()
 
+    global epsg
     epsg = sr
+
     if url[-1] == r"/":
         query_url = url + "query"
         url_json = url[:-1] + "?f=pjson"
@@ -62,7 +76,11 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
 
     log.info("开始创建文件数据库...")
 
-    gdb, out_layer, OID_NAME = createFileGDB(output_path, layer_name, epsg, url_json)
+    gdb, out_layer, OID = createFileGDB(output_path, layer_name, url_json)
+
+    global OID_NAME
+    OID_NAME = OID
+
     if out_layer is None or gdb is None:
         return False
 
@@ -70,42 +88,47 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
     log.info("保存位置为" + os.path.abspath(output_path) + ", 图层名称为" + out_layer.GetName())
 
     iRow = 0
-    log.info('开始抓取数据...')
+    log.info('开始使用协程抓取...')
 
     looplst = getIds(query_url, loop_pos)
 
     if looplst is None:
         return False
 
+    tasks = []
+    loop = asyncio.ProactorEventLoop()
+    asyncio.set_event_loop(loop)
+
+    iloop = 0
     for i in range(0, len(looplst) - 1):
-        trytime = 0
+        line1 = looplst[i]
+        line2 = looplst[i + 1]
+        query_clause = f'{OID_NAME} >= {line1} and {OID_NAME} < {line2}'
 
-        while True:
-            line1 = looplst[i]
-            line2 = looplst[i + 1]
-            query_clause = f'{OID_NAME} >= {line1} and {OID_NAME} < {line2}'
-            esri_json = ogr.GetDriverByName('ESRIJSON')
-            respData = get_json_by_query(query_url, query_clause, epsg)
-            geoObjs = esri_json.Open(respData, 0)
-            if geoObjs is not None:
-                json_Layer = geoObjs.GetLayer()
-                # record_num = json_Layer.GetFeatureCount()
+        if len(tasks) >= 10:
+            tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+            loop.run_until_complete(asyncio.wait(tasks))
+            tasks = []
+            iloop += 1
+            log.debug(iloop)
+            continue
+        else:
+            tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
 
-                defn = json_Layer.GetLayerDefn()
-                for feature in json_Layer:  # 将json要素拷贝到gdb中
-                    addField(feature, defn, OID_NAME, out_layer)
-                    iRow += 1
-                    # log.debug(iRow)
-                break
-            else:
-                trytime += 1
-                if trytime > try_num:
-                    log.error('数据抓取失败. error in ' + query_clause)
-                    break
+    loop.run_until_complete(asyncio.wait(tasks))
+    log.info('协程抓取完成.')
+
+    log.info('开始用单线程抓取失败的url...')
+    while len(failed_urls) > 0:
+        furl = failed_urls.pop()
+        if not output_data(furl[0], furl[1], out_layer):
+            log.error('url:{} data:{} error:{}'.format(furl[0], furl[1], traceback.format_exc()))
 
     outdriver = None
     del gdb
     out_layer = None
+    if lock.locked():
+        lock.release()
     end = time.time()
     log.info('完成抓取.耗时：' + str(end - start))
     return True
@@ -190,7 +213,7 @@ def addField(feature, defn, OID_NAME, out_layer):
         log.error("错误发生在FID=" + str(FID) + "\n" + traceback.format_exc())
 
 
-def createFileGDB(output_path, layer_name, epsg, url_json):
+def createFileGDB(output_path, layer_name, url_json):
     try:
         outdriver = ogr.GetDriverByName('FileGDB')
         if os.path.exists(output_path):
@@ -274,10 +297,6 @@ def check_name(name):
 
 
 def get_json(url):
-    # 定义请求头
-    reqheaders = {'Content-Type': 'application/x-www-form-urlencoded',
-                  'Host': 'suplicmap.pnr.sz',
-                  'Pragma': 'no-cache'}
     # 请求不同页面的数据
     trytime = 0
     while trytime < try_num:
@@ -297,12 +316,23 @@ def get_json(url):
 
 
 #  Post参数到服务器获取geojson对象
-def get_json_by_query(url, query_clause, epsg):
-    # 定义请求头
-    reqheaders = {'Content-Type': 'application/x-www-form-urlencoded',
-                  'Host': 'suplicmap.pnr.sz',
-                  'Pragma': 'no-cache'}
+async def get_json_by_query_async(url, query_clause):
+    # 定义post的参数
+    body_value = {'where': query_clause,
+                  'outFields': '*',
+                  'outSR': str(epsg),
+                  'f': 'json'}
 
+    async with aiohttp.ClientSession() as session:
+        try:
+            respData = await send_http(session, method="post", respond_Type="content", headers=reqheaders, data=body_value, url=url, retries=0)
+            return respData
+        except:
+            log.error('url:{} data:{} error:{}'.format(url, query_clause, traceback.format_exc()))
+
+
+#  Post参数到服务器获取geojson对象
+def get_json_by_query(url, query_clause):
     # 定义post的参数
     body_value = {'where': query_clause,
                   'outFields': '*',
@@ -318,7 +348,6 @@ def get_json_by_query(url, query_clause, epsg):
             req = urllib.request.Request(url=url, data=data, headers=reqheaders)
             r = urllib.request.urlopen(req)
             respData = r.read().decode('utf-8')
-            # geoObj = json.loads(respData)
             return respData
         except:
             log.error('HTTP请求失败！正在准备重发...')
@@ -327,6 +356,44 @@ def get_json_by_query(url, query_clause, epsg):
         time.sleep(2)
         continue
     return None
+
+
+async def output_data_async(url, query_clause, out_layer):
+    try:
+        respData = await get_json_by_query_async(url, query_clause)
+        esri_json = ogr.GetDriverByName('ESRIJSON')
+        geoObjs = esri_json.Open(respData, 0)
+        if geoObjs is not None:
+            json_Layer = geoObjs.GetLayer()
+
+            defn = json_Layer.GetLayerDefn()
+            for feature in json_Layer:  # 将json要素拷贝到gdb中
+                addField(feature, defn, OID_NAME, out_layer)
+        else:
+            raise Exception("要素为空!")
+    except Exception as err:
+        await lock.acquire()
+        failed_urls.append([url, query_clause])
+        lock.release()
+        log.error('url:{} data:{} error:{}'.format(url, query_clause, traceback.format_exc()))
+
+
+def output_data(url, query_clause, out_layer):
+    try:
+        respData = get_json_by_query(url, query_clause)
+        esri_json = ogr.GetDriverByName('ESRIJSON')
+        geoObjs = esri_json.Open(respData, 0)
+        if geoObjs is not None:
+            json_Layer = geoObjs.GetLayer()
+
+            defn = json_Layer.GetLayerDefn()
+            for feature in json_Layer:  # 将json要素拷贝到gdb中
+                addField(feature, defn, OID_NAME, out_layer)
+            return True
+        else:
+            return False
+    except:
+        return False
 
 
 def parseDateField(fields):

@@ -82,7 +82,6 @@ def main(url, file_name, sr, level, output_path):
 
     tasks = []
     loop = asyncio.ProactorEventLoop()
-    itask = 0
     asyncio.set_event_loop(loop)
     # loop = asyncio.get_event_loop()
     iloop = 0
@@ -91,16 +90,15 @@ def main(url, file_name, sr, level, output_path):
             # tile_url = url + "/tile/" + str(level) + "/" + str(i) + "/" + str(j)
             tile_url = f'{url}/tile/{level}/{i}/{j}'
 
-            if itask >= 3000:
+            if len(tasks) >= 3000:
+                tasks.append(asyncio.ensure_future(output_img_asyc(tile_url, level_path, i, j)))
                 loop.run_until_complete(asyncio.wait(tasks))
                 tasks = []
-                itask = 0
                 iloop += 1
                 log.debug(iloop)
                 continue
             else:
                 tasks.append(asyncio.ensure_future(output_img_asyc(tile_url, level_path, i, j)))
-            itask += 1
 
     loop.run_until_complete(asyncio.wait(tasks))
     log.info('协程抓取完成.')

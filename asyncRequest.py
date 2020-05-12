@@ -133,7 +133,8 @@ async def send_http(session, method, url, *,
             break
 
         attempt -= 1
-        log.warning('HTTP请求失败! 尝试重新发送... method:{} url:{} '.format(method.upper(), url))
+        if attempt > 0:
+            log.warning('HTTP请求失败! 尝试重新发送... method:{} url:{} '.format(method.upper(), url))
 
     if raised_exc:
         raise raised_exc

@@ -74,7 +74,7 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
         query_url = url + "/query"
         url_json = url + "?f=pjson"
 
-    log.info("开始创建文件数据库...")
+    log.info("\n开始创建文件数据库...")
 
     gdb, out_layer, OID = createFileGDB(output_path, layer_name, url_json)
 
@@ -95,34 +95,41 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
     if looplst is None:
         return False
 
-    tasks = []
-    loop = asyncio.ProactorEventLoop()
-    asyncio.set_event_loop(loop)
+    try:
+        tasks = []
+        loop = asyncio.ProactorEventLoop()
+        asyncio.set_event_loop(loop)
 
-    iloop = 0
-    for i in range(0, len(looplst) - 1):
-        line1 = looplst[i]
-        line2 = looplst[i + 1]
-        query_clause = f'{OID_NAME} >= {line1} and {OID_NAME} < {line2}'
+        iloop = 0
+        for i in range(0, len(looplst) - 1):
+            line1 = looplst[i]
+            line2 = looplst[i + 1]
+            query_clause = f'{OID_NAME} >= {line1} and {OID_NAME} < {line2}'
 
-        if len(tasks) >= 10:
-            tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+            if len(tasks) >= 10:
+                tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+                loop.run_until_complete(asyncio.wait(tasks))
+                tasks = []
+                iloop += 1
+                log.debug(iloop)
+                continue
+            else:
+                tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+
+        if len(tasks) > 0:
             loop.run_until_complete(asyncio.wait(tasks))
-            tasks = []
-            iloop += 1
-            log.debug(iloop)
-            continue
-        else:
-            tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+        log.info('协程抓取完成.')
 
-    loop.run_until_complete(asyncio.wait(tasks))
-    log.info('协程抓取完成.')
-
-    log.info('开始用单线程抓取失败的url...')
-    while len(failed_urls) > 0:
-        furl = failed_urls.pop()
-        if not output_data(furl[0], furl[1], out_layer):
-            log.error('url:{} data:{} error:{}'.format(furl[0], furl[1], traceback.format_exc()))
+        if len(failed_urls) > 0:
+            log.info('开始用单线程抓取失败的url...')
+            while len(failed_urls) > 0:
+                furl = failed_urls.pop()
+                if not output_data(furl[0], furl[1], out_layer):
+                    log.error('url:{} data:{} error:{}'.format(furl[0], furl[1], traceback.format_exc()))
+                    continue
+    except Exception as ex:
+        log.error("抓取失败!" + traceback.format_exc())
+        return False
 
     outdriver = None
     del gdb
@@ -130,7 +137,7 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
     if lock.locked():
         lock.release()
     end = time.time()
-    log.info('完成抓取.耗时：' + str(end - start))
+    log.info('完成抓取.耗时：' + str(end - start) + '\n')
     return True
 
 
@@ -156,6 +163,10 @@ def getIds(query_url, loop_pos):
             respData = r.read().decode('utf-8')
             respData = json.loads(respData)
             ids = respData['objectIds']
+
+            if ids == 'null':
+                log.warning("要素为空!")
+                return False
 
             if ids is not None:
                 ids.sort()

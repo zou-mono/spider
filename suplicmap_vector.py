@@ -134,6 +134,10 @@ def getIds(query_url, loop_pos):
             respData = json.loads(respData)
             ids = respData['objectIds']
 
+            if ids == 'null':
+                log.warning("要素为空!")
+                return False
+
             if ids is not None:
                 ids.sort()
                 firstId = ids[0]

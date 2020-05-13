@@ -103,11 +103,12 @@ def main(url, file_name, sr, level, output_path):
     loop.run_until_complete(asyncio.wait(tasks))
     log.info('协程抓取完成.')
 
-    log.info('开始用单线程抓取失败的url...')
-    while len(failed_urls) > 0:
-        furl = failed_urls.pop()
-        if not output_img2(furl[0], level_path, furl[1], furl[2]):
-            log.error('url:{} error:{}'.format(url, traceback.format_exc()))
+    if len(failed_urls) > 0:
+        log.info('开始用单线程抓取失败的url...')
+        while len(failed_urls) > 0:
+            furl = failed_urls.pop()
+            if not output_img2(furl[0], level_path, furl[1], furl[2]):
+                log.error('url:{} error:{}'.format(url, traceback.format_exc()))
 
     end = time.time()
     if lock.locked():

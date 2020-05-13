@@ -96,7 +96,7 @@ async def send_http(session, method, url, *,
                     )
                     # raised_exc = FailedRequest(code=response.status, message=response.reason, url=url,
                     #                            raised='')
-                    raise aiohttp.ClientResponseError
+                    raise aiohttp.ClientError
                     # raise aiohttp.errors.HttpProcessingError(
                     #     code=response.status, message=response.reason)
                 else:
@@ -120,8 +120,7 @@ async def send_http(session, method, url, *,
                         log.warning('received {} for {}'.format(data, url))
                         print(data['errors'][0]['detail'])
                         raised_exc = None
-        except (aiohttp.ClientError,
-                aiohttp.ClientResponseError) as exc:
+        except aiohttp.ClientError as exc:
             try:
                 code = exc.status
             except AttributeError:

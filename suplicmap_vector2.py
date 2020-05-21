@@ -16,6 +16,7 @@ from asyncRequest import send_http
 
 try_num = 5
 num_return = 1000  # 返回条数
+concurrence_num = 10  # 协程并发次数
 # max_return = 1000000
 log = Log(__file__)
 failed_urls = []
@@ -58,10 +59,13 @@ reqheaders = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebK
     required=True)
 def main(url, layer_name, sr, loop_pos, output_path):
     """crawler program for vector data in http://suplicmap.pnr.sz."""
-    crawl(url, layer_name, sr, loop_pos, output_path)
+    url_lst = url.split(r'/')
+    layer_order = url_lst[-1]
+    service_name = url_lst[-3]
+    crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
 
 
-def crawl(url, layer_name, sr, loop_pos, output_path):
+def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order):
     start = time.time()
 
     global epsg
@@ -74,9 +78,10 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
         query_url = url + "/query"
         url_json = url + "?f=pjson"
 
+
     log.info("\n开始创建文件数据库...")
 
-    gdb, out_layer, OID = createFileGDB(output_path, layer_name, url_json)
+    gdb, out_layer, OID = createFileGDB(output_path, layer_name, url_json, service_name, layer_order)
 
     global OID_NAME
     OID_NAME = OID
@@ -87,8 +92,7 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
     log.info("文件数据库创建成功.")
     log.info("保存位置为" + os.path.abspath(output_path) + ", 图层名称为" + out_layer.GetName())
 
-    iRow = 0
-    log.info('开始使用协程抓取...')
+    log.info(f'开始使用协程抓取服务{service_name}的第{layer_order}个图层...')
 
     looplst = getIds(query_url, loop_pos)
 
@@ -106,38 +110,48 @@ def crawl(url, layer_name, sr, loop_pos, output_path):
             line2 = looplst[i + 1]
             query_clause = f'{OID_NAME} >= {line1} and {OID_NAME} < {line2}'
 
-            if len(tasks) >= 10:
-                tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+            if len(tasks) >= concurrence_num:
+                tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer, line1, line2)))
                 loop.run_until_complete(asyncio.wait(tasks))
                 tasks = []
                 iloop += 1
                 log.debug(iloop)
                 continue
             else:
-                tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer)))
+                tasks.append(asyncio.ensure_future(output_data_async(query_url, query_clause, out_layer, line1, line2)))
 
         if len(tasks) > 0:
             loop.run_until_complete(asyncio.wait(tasks))
         log.info('协程抓取完成.')
 
+        dead_link = 0
         if len(failed_urls) > 0:
             log.info('开始用单线程抓取失败的url...')
             while len(failed_urls) > 0:
                 furl = failed_urls.pop()
                 if not output_data(furl[0], furl[1], out_layer):
-                    log.error('url:{} data:{} error:{}'.format(furl[0], furl[1], traceback.format_exc()))
-                    continue
-    except Exception as ex:
-        log.error("抓取失败!" + traceback.format_exc())
+                    for i in range(furl[2], furl[3]):
+                        query_clause2 = f'{OID_NAME} = {i}'
+                        if not output_data(furl[0], query_clause2, out_layer):
+                            log.error('url:{} data:{} error:{}'.format(furl[0], query_clause2, traceback.format_exc()))
+                            dead_link += 1
+                            continue
+    except:
+        del gdb
+        log.error(traceback.format_exc())
         return False
 
     outdriver = None
     del gdb
     out_layer = None
+
     if lock.locked():
         lock.release()
     end = time.time()
-    log.info('完成抓取.耗时：' + str(end - start) + '\n')
+    if dead_link == 0:
+        log.info('成功完成抓取.耗时：' + str(end - start) + '\n')
+    else:
+        log.info('未成功完成抓取, 死链接数目为:' + str(dead_link) + '. 耗时：' + str(end - start) + '\n')
     return True
 
 
@@ -164,10 +178,6 @@ def getIds(query_url, loop_pos):
             respData = json.loads(respData)
             ids = respData['objectIds']
 
-            if ids == 'null':
-                log.warning("要素为空!")
-                return False
-
             if ids is not None:
                 ids.sort()
                 firstId = ids[0]
@@ -186,6 +196,7 @@ def getIds(query_url, loop_pos):
 
                 return looplst
             else:
+                log.warning("要素为空!")
                 return None
         except:
             log.error('HTTP请求失败！正在准备重发...')
@@ -224,7 +235,7 @@ def addField(feature, defn, OID_NAME, out_layer):
         log.error("错误发生在FID=" + str(FID) + "\n" + traceback.format_exc())
 
 
-def createFileGDB(output_path, layer_name, url_json):
+def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
     try:
         outdriver = ogr.GetDriverByName('FileGDB')
         if os.path.exists(output_path):
@@ -240,25 +251,30 @@ def createFileGDB(output_path, layer_name, url_json):
             return
 
         geoObjs = json.loads(respData)
+        if geoObjs['type'] == 'Group Layer':
+            log.warning('不创建非要素图层.')
+            return None, None, ""
         dateLst = parseDateField(geoObjs)  # 获取日期字段
         OID = parseOIDField(geoObjs)
         if OID is None:
             log.error('获取OID字段信息失败,无法创建数据库.')
-            return
+            return None, None, ""
 
         GeoType = parseGeoTypeField(geoObjs)
         if GeoType is None:
             log.error('获取Geometry字段信息失败,无法创建数据库.')
-            return
+            return None, None, ""
 
         if layer_name is None:
             layer_name = check_name(geoObjs['name'])
+        layer_alias_name = f'{service_name}#{layer_order}#{layer_name}'
 
         srs = osr.SpatialReference()
         srs.ImportFromEPSG(epsg)
 
         # out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=temp_layer.GetGeomType(),options=["LAYER_ALIAS=电动"])
-        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType)
+
+        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType, options=[f'LAYER_ALIAS={layer_alias_name}'])
         # LayerDefn = out_layer.GetLayerDefn()
         fields = geoObjs['fields']
 
@@ -339,7 +355,8 @@ async def get_json_by_query_async(url, query_clause):
             respData = await send_http(session, method="post", respond_Type="content", headers=reqheaders, data=body_value, url=url, retries=0)
             return respData
         except:
-            log.error('url:{} data:{} error:{}'.format(url, query_clause, traceback.format_exc()))
+            # log.error('url:{} data:{} error:{}'.format(url, query_clause, traceback.format_exc()))
+            return None
 
 
 #  Post参数到服务器获取geojson对象
@@ -364,12 +381,12 @@ def get_json_by_query(url, query_clause):
             log.error('HTTP请求失败！正在准备重发...')
             trytime += 1
 
-        time.sleep(2)
+        time.sleep(1)
         continue
     return None
 
 
-async def output_data_async(url, query_clause, out_layer):
+async def output_data_async(url, query_clause, out_layer, startID, endID):
     try:
         respData = await get_json_by_query_async(url, query_clause)
         esri_json = ogr.GetDriverByName('ESRIJSON')
@@ -384,7 +401,7 @@ async def output_data_async(url, query_clause, out_layer):
             raise Exception("要素为空!")
     except Exception as err:
         await lock.acquire()
-        failed_urls.append([url, query_clause])
+        failed_urls.append([url, query_clause, startID, endID])
         lock.release()
         log.error('url:{} data:{} error:{}'.format(url, query_clause, traceback.format_exc()))
 

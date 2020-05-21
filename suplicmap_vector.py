@@ -134,10 +134,6 @@ def getIds(query_url, loop_pos):
             respData = json.loads(respData)
             ids = respData['objectIds']
 
-            if ids == 'null':
-                log.warning("要素为空!")
-                return False
-
             if ids is not None:
                 ids.sort()
                 firstId = ids[0]
@@ -156,6 +152,7 @@ def getIds(query_url, loop_pos):
 
                 return looplst
             else:
+                log.warning("要素为空!")
                 return None
         except:
             log.error('HTTP请求失败！正在准备重发...')
@@ -194,7 +191,7 @@ def addField(feature, defn, OID_NAME, out_layer):
         log.error("错误发生在FID=" + str(FID) + "\n" + traceback.format_exc())
 
 
-def createFileGDB(output_path, layer_name, epsg, url_json):
+def createFileGDB(output_path, layer_name, url_json):
     try:
         outdriver = ogr.GetDriverByName('FileGDB')
         if os.path.exists(output_path):
@@ -210,16 +207,19 @@ def createFileGDB(output_path, layer_name, epsg, url_json):
             return
 
         geoObjs = json.loads(respData)
+        if geoObjs['type'] == 'Group Layer':
+            log.warning('不创建非要素图层.')
+            return None, None, ""
         dateLst = parseDateField(geoObjs)  # 获取日期字段
         OID = parseOIDField(geoObjs)
         if OID is None:
             log.error('获取OID字段信息失败,无法创建数据库.')
-            return
+            return None, None, ""
 
         GeoType = parseGeoTypeField(geoObjs)
         if GeoType is None:
             log.error('获取Geometry字段信息失败,无法创建数据库.')
-            return
+            return None, None, ""
 
         if layer_name is None:
             layer_name = check_name(geoObjs['name'])

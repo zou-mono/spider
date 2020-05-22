@@ -87,7 +87,7 @@ def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
     OID_NAME = OID
 
     if out_layer is None or gdb is None:
-        return False
+        return False, '创建数据库失败！'
 
     log.info("文件数据库创建成功.")
     log.info("保存位置为" + os.path.abspath(output_path) + ", 图层名称为" + out_layer.GetName())
@@ -97,7 +97,7 @@ def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
     looplst = getIds(query_url, loop_pos)
 
     if looplst is None:
-        return False
+        return False, '要素为空！'
 
     try:
         tasks = []
@@ -138,8 +138,8 @@ def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
                             continue
     except:
         del gdb
-        log.error(traceback.format_exc())
-        return False
+        # log.error(traceback.format_exc())
+        return False, traceback.format_exc()
 
     outdriver = None
     del gdb
@@ -152,7 +152,7 @@ def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
         log.info('成功完成抓取.耗时：' + str(end - start) + '\n')
     else:
         log.info('未成功完成抓取, 死链接数目为:' + str(dead_link) + '. 耗时：' + str(end - start) + '\n')
-    return True
+    return True, ''
 
 
 def getIds(query_url, loop_pos):
@@ -196,7 +196,7 @@ def getIds(query_url, loop_pos):
 
                 return looplst
             else:
-                log.warning("要素为空!")
+                # log.warning("要素为空!")
                 return None
         except:
             log.error('HTTP请求失败！正在准备重发...')
@@ -214,13 +214,15 @@ def addField(feature, defn, OID_NAME, out_layer):
         ofeature = ogr.Feature(out_layer.GetLayerDefn())
         ofeature.SetGeometry(feature.GetGeometryRef())
         ofeature.SetFID(FID)
-        if feature.GetField("OBJECTID") is not None and OID_NAME != 'OBJECTID':
-            ofeature.SetField('OBJECTID_', feature.GetField("OBJECTID"))
 
         for i in range(defn.GetFieldCount()):
-            fieldName = check_name(defn.GetFieldDefn(i).GetName())
+            # if fieldName != "OBJECTID"  and OID_NAME != 'OBJECTID':
+            #     ofeature.SetField('OBJECTID_', feature.GetField("OBJECTID"))
+            fieldName = defn.GetFieldDefn(i).GetName()
             if fieldName == "OBJECTID" or fieldName == OID_NAME:
                 continue
+
+            fieldName = check_name(fieldName)
 
             ofeature.SetField(fieldName, feature.GetField(i))
 
@@ -274,7 +276,7 @@ def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
 
         # out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=temp_layer.GetGeomType(),options=["LAYER_ALIAS=电动"])
 
-        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType, options=[f'LAYER_ALIAS={layer_alias_name}'])
+        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType, options=[f'FEATURE_DATASET={service_name}', f'LAYER_ALIAS={layer_alias_name}'])
         # LayerDefn = out_layer.GetLayerDefn()
         fields = geoObjs['fields']
 
@@ -282,7 +284,8 @@ def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
         for field in fields:
             # fieldDefn = out_layerDefn.GetFieldDefn(i)
             if field['type'] == "esriFieldTypeOID":
-                OID_NAME = check_name(field['name'])
+                # OID_NAME = check_name(field['name'])
+                OID_NAME = field['name']
                 continue
             if field['type'] == "esriFieldTypeGeometry":
                 continue

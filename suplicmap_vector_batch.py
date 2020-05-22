@@ -88,8 +88,9 @@ def main(service_url, sr, start_service, start_layer, end_service, end_layer, ou
             layerName = layer['name']
             url = mapservice_url + "/" + str(layer['id'])
             log.info(f'正在抓取{serviceName}服务({i})的{layerName}图层({j}).{url}')
-            if not crawl(url=url, layer_name=None, sr=sr, loop_pos=-1, output_path=output_path, service_name=serviceName, layer_order=j):
-                log.error("抓取失败!")
+            flag, message = crawl(url=url, layer_name=None, sr=sr, loop_pos=-1, output_path=output_path, service_name=serviceName, layer_order=j)
+            if not flag:
+                log.error("抓取失败!" + message)
                 continue
 
 

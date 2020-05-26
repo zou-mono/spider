@@ -27,10 +27,11 @@ dateLst = []
 OID_NAME = "OBJECTID"  # FID字段名称
 
 # 定义请求头
-reqheaders = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36 Edg/81.0.416.72',
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Host': 'suplicmap.pnr.sz',
-              'Pragma': 'no-cache'}
+reqheaders = {
+    'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36 Edg/81.0.416.72',
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Host': 'suplicmap.pnr.sz',
+    'Pragma': 'no-cache'}
 
 
 @click.command()
@@ -78,7 +79,6 @@ def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
         query_url = url + "/query"
         url_json = url + "?f=pjson"
 
-
     log.info("\n开始创建文件数据库...")
 
     gdb, out_layer, OID = createFileGDB(output_path, layer_name, url_json, service_name, layer_order)
@@ -94,7 +94,11 @@ def crawl(url, layer_name, sr, loop_pos, output_path, service_name, layer_order)
 
     log.info(f'开始使用协程抓取服务{service_name}的第{layer_order}个图层...')
 
-    looplst = getIds(query_url, loop_pos)
+    looplst, OID = getIds(query_url, loop_pos)
+
+    if OID != OID_NAME:
+        OID_NAME = OID
+        log.warning('OID字段不一致.')
 
     if looplst is None:
         return False, '要素为空！'
@@ -177,11 +181,12 @@ def getIds(query_url, loop_pos):
             respData = r.read().decode('utf-8')
             respData = json.loads(respData)
             ids = respData['objectIds']
+            OID = respData['objectIdFieldName']
 
             if ids is not None:
                 ids.sort()
                 firstId = ids[0]
-                endId = ids[len(ids)-1]
+                endId = ids[len(ids) - 1]
 
                 if loop_pos > endId:
                     log.error("起始ID大于末尾ID！")
@@ -191,10 +196,10 @@ def getIds(query_url, loop_pos):
                     looplst = list(range(firstId, endId, num_return))
                 else:
                     looplst = list(range(loop_pos, endId, num_return))
-                if looplst[len(looplst)-1] != endId + 1:
+                if looplst[len(looplst) - 1] != endId + 1:
                     looplst.append(endId + 1)
 
-                return looplst
+                return looplst, OID
             else:
                 # log.warning("要素为空!")
                 return None
@@ -224,7 +229,10 @@ def addField(feature, defn, OID_NAME, out_layer):
 
             fieldName = check_name(fieldName)
 
-            ofeature.SetField(fieldName, feature.GetField(i))
+            try:
+                ofeature.SetField(fieldName, feature.GetField(i))
+            except:
+                log.warning('json中的字段不存在.')
 
         for dateField in dateLst:
             timeArray = time.localtime(int(feature.GetField(dateField)) / 1000)  # 1970秒数
@@ -253,7 +261,7 @@ def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
             return
 
         geoObjs = json.loads(respData)
-        if geoObjs['type'] == 'Group Layer':
+        if geoObjs['type'] != 'Feature Layer':
             log.warning('不创建非要素图层.')
             return None, None, ""
         dateLst = parseDateField(geoObjs)  # 获取日期字段
@@ -276,7 +284,8 @@ def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
 
         # out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=temp_layer.GetGeomType(),options=["LAYER_ALIAS=电动"])
 
-        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType, options=[f'FEATURE_DATASET={service_name}', f'LAYER_ALIAS={layer_alias_name}'])
+        out_layer = gdb.CreateLayer(layer_name, srs=srs, geom_type=GeoType,
+                                    options=[f'FEATURE_DATASET={service_name}', f'LAYER_ALIAS={layer_alias_name}'])
         # LayerDefn = out_layer.GetLayerDefn()
         fields = geoObjs['fields']
 
@@ -285,7 +294,7 @@ def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
             # fieldDefn = out_layerDefn.GetFieldDefn(i)
             if field['type'] == "esriFieldTypeOID":
                 # OID_NAME = check_name(field['name'])
-                OID_NAME = field['name']
+                OID = field['name']
                 continue
             if field['type'] == "esriFieldTypeGeometry":
                 continue
@@ -313,7 +322,7 @@ def createFileGDB(output_path, layer_name, url_json, service_name, layer_order):
 
             log.debug(fieldName + " - " + fieldType + " " + str(fieldWidth) + " " + str(GetPrecision))
 
-        return gdb, out_layer, OID_NAME
+        return gdb, out_layer, OID
     except:
         log.error("创建数据库失败.\n" + traceback.format_exc())
         return None, None, ""
@@ -355,7 +364,8 @@ async def get_json_by_query_async(url, query_clause):
 
     async with aiohttp.ClientSession() as session:
         try:
-            respData = await send_http(session, method="post", respond_Type="content", headers=reqheaders, data=body_value, url=url, retries=0)
+            respData = await send_http(session, method="post", respond_Type="content", headers=reqheaders,
+                                       data=body_value, url=url, retries=0)
             return respData
         except:
             # log.error('url:{} data:{} error:{}'.format(url, query_clause, traceback.format_exc()))
